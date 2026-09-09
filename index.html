@@ -67,6 +67,10 @@
   .rowbtn .t small { font-size: 12px; color: var(--muted); }
   .rowbtn.taken { background: var(--green-2); color: var(--cream); border: 1px solid var(--line-2); }
   .rowbtn.taken .t small, .rowbtn.taken .n { color: var(--muted-g); }
+  .rowbtn.read { background: #d9d3c4; color: var(--muted); }
+  .rowbtn.read .t b { font-weight: 500; }
+  .rowbtn.read .t small, .rowbtn.read .n { color: #8d8779; }
+  .rowbtn.read .dots i.on { background: #b89a93; }
   .dots { display: flex; gap: 3px; flex-shrink: 0; }
   .dots i { width: 6px; height: 6px; border-radius: 999px; background: var(--cream-line); }
   .dots i.on { background: var(--rowdy); }
@@ -219,6 +223,19 @@
   try { state.fights = JSON.parse(localStorage.getItem(K.fights) || "null"); } catch (e) { state.fights = null; }
   try { state.stances = JSON.parse(localStorage.getItem(K.stances) || "{}"); } catch (e) { state.stances = {}; }
   try { state.volleys = JSON.parse(localStorage.getItem(K.volleys) || "{}"); } catch (e) { state.volleys = {}; }
+  K.read = "orderpaper:read";
+  try { state.read = JSON.parse(localStorage.getItem(K.read) || "{}"); } catch (e) { state.read = {}; }
+  // Deck order: unread first, then read, then those with a stance or side taken. Chamber order within each group.
+  const isTaken = (f) => !!state.stances[f.id];
+  const isRead = (f) => !!state.read[f.id];
+  const rank = (f) => isTaken(f) ? 2 : isRead(f) ? 1 : 0;
+  function order() { return state.fights.map((f, i) => i).sort((a, b) => rank(state.fights[a]) - rank(state.fights[b]) || a - b); }
+  function markRead(i) { const f = state.fights && state.fights[i]; if (!f || state.read[f.id]) return; state.read[f.id] = Date.now(); save(K.read, state.read); }
+  function nextUnread(from) {
+    const n = state.fights.length;
+    for (let k = 1; k <= n; k++) { const i = (from + k) % n; if (!isRead(state.fights[i]) && !isTaken(state.fights[i])) return i; }
+    return -1;
+  }
   try { state.portrait = JSON.parse(localStorage.getItem(K.portrait) || "null"); } catch (e) { state.portrait = null; }
   try { state.learn = JSON.parse(localStorage.getItem(K.learn) || "{}"); } catch (e) { state.learn = {}; }
   for (const id of Object.keys(state.learn)) for (const node of Object.values(state.learn[id])) node.streaming = false;
@@ -464,8 +481,8 @@ ${fightContext(f)}`;
 
   // ---------- actions ----------
   const actions = {
-    start() { state.idx = 0; state.view = "fight"; state.showFA = false; render(); },
-    openFight(i) { state.idx = Number(i); state.view = "fight"; state.showFA = false; render(); },
+    start() { const i = nextUnread(-1); state.idx = i < 0 ? order()[0] : i; markRead(state.idx); state.view = "fight"; state.showFA = false; render(); },
+    openFight(i) { state.idx = Number(i); markRead(state.idx); state.view = "fight"; state.showFA = false; render(); },
     deck() { state.view = "deck"; state.reading = null; render(); },
     fa() { state.showFA = !state.showFA; render(); },
     read(i) { state.reading = state.reading === Number(i) ? null : Number(i); render(); },
@@ -480,7 +497,7 @@ ${fightContext(f)}`;
       actions.next();
     },
     skip() { actions.next(); },
-    next() { state.showFA = false; state.reading = null; if (state.idx < state.fights.length - 1) { state.idx++; state.view = "fight"; } else { state.view = "profile"; } render(); },
+    next() { state.showFA = false; state.reading = null; const i = nextUnread(state.idx); if (i >= 0) { state.idx = i; markRead(i); state.view = "fight"; } else { state.view = "profile"; } render(); },
     profile() { state.view = "profile"; render(); },
     home() { if (state.ctl) state.ctl.abort(); state.view = "deck"; state.reading = null; state.lstack = []; render(); },
     learn() { const f = current(); state.lstack = []; state.view = "learn"; seedLearn(f); render(); loadLearn(f, []); },
@@ -492,7 +509,7 @@ ${fightContext(f)}`;
     portrait() { writePortrait(); },
     regen() { state.fights = null; state.stances = {}; state.portrait = null; save(K.fights, null); save(K.stances, {}); save(K.portrait, null); state.view = "deck"; render(); generate(true); },
     retry() { generate(false); },
-    clearStances() { state.stances = {}; state.portrait = null; save(K.stances, {}); save(K.portrait, null); state.view = "deck"; render(); },
+    clearStances() { state.stances = {}; state.portrait = null; state.read = {}; state.volleys = {}; save(K.stances, {}); save(K.portrait, null); save(K.read, {}); save(K.volleys, {}); state.view = "deck"; render(); },
   };
 
   // ---------- rendering ----------
@@ -544,11 +561,11 @@ ${fightContext(f)}`;
 
   function deckView() {
     const f = state.fights;
-    const rows = f ? f.map((x, i) => {
+    const rows = f ? order().map((i) => { const x = f[i];
       const st = state.stances[x.id];
-      return `<button class="rowbtn ${st ? "taken" : ""}" data-action="openFight" data-i="${i}">
+      return `<button class="rowbtn ${st ? "taken" : isRead(x) ? "read" : ""}" data-action="openFight" data-i="${i}">
         <span class="n">${i + 1}</span>
-        <span class="t"><b>${esc(x.title)}</b><small><span class="mark" style="background:${partyColor(x.sides.a.party)}"></span>${esc(x.sides.a.speaker.split(" ").pop())} (${esc(shortParty(x.sides.a.party))})${x.kind === "friendly" ? " · Friendly" : ` v ${esc(pmName.split(" ").pop())}`}${x.kind === "six" ? " · The Six" : x.kind === "agreed" ? " · Agreed" : ""}${st ? " · stance taken" : ""}</small></span>
+        <span class="t"><b>${esc(x.title)}</b><small><span class="mark" style="background:${partyColor(x.sides.a.party)}"></span>${esc(x.sides.a.speaker.split(" ").pop())} (${esc(shortParty(x.sides.a.party))})${x.kind === "friendly" ? " · Friendly" : ` v ${esc(pmName.split(" ").pop())}`}${x.kind === "six" ? " · The Six" : x.kind === "agreed" ? " · Agreed" : ""}${st ? (x.stance ? " · stance taken" : " · side taken") : isRead(x) ? " · read" : ""}</small></span>
         ${dots(x.rowdy)}
       </button>`;
     }).join("") : [0, 1, 2, 3, 4].map((i) => `<div class="rowbtn" style="cursor:default"><span class="n">${i + 1}</span><span class="t skel"><i></i><i></i></span></div>`).join("");
@@ -564,7 +581,7 @@ ${fightContext(f)}`;
       <div class="rows">${rows}</div>
       <div class="note" style="display:flex; justify-content:space-between;"><span>${S.length} contributions · ${PMQ.counts.interruptions} interruptions · Hansard</span><span>Red dots: rowdiness</span></div>
       <div class="spacer"></div>
-      <div class="bar-cta"><button class="cta cream" data-action="start" ${f ? "" : "disabled"}><span>Start the deck</span>${svg.arrow}</button></div>`;
+      <div class="bar-cta"><button class="cta cream" data-action="start" ${f ? "" : "disabled"}><span>${(() => { if (!f) return "Start the deck"; const left = f.filter((x) => !isRead(x) && !isTaken(x)).length; return left === f.length ? "Start the deck" : left === 0 ? "All read. Start again" : `Continue · ${left} left`; })()}</span>${svg.arrow}</button></div>`;
   }
 
   function friendlyView(f, n) {
